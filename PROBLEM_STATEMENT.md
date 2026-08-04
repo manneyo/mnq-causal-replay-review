@@ -34,10 +34,10 @@ The replacement reader must:
 9. Fail closed on missing file parts, bad schemas, truncated rows, or sequence gaps.
 10. Produce a machine-readable per-session certificate and an append-only audit log.
 
-## Actual legacy behavior
+## Original legacy behavior
 
-`load_ninjatrader_event_exports()` currently concatenates pandas DataFrames,
-deduplicates by event contents, and sorts by `timestamp_utc_ns`.
+`load_ninjatrader_event_exports()` originally concatenated pandas DataFrames,
+deduplicated by event contents, and sorted by `timestamp_utc_ns`.
 
 Consequences:
 
@@ -53,30 +53,33 @@ python -m pytest -q tests/test_known_causality_gaps.py -rxX
 python scripts/inspect_sample.py samples/synthetic_mnq_events.csv
 ```
 
-The expected-failure tests cover:
+The regression tests cover:
 
 - Physical callback order when source time regresses.
 - Preservation of identical but physically separate quote callbacks.
 
-## Requested review
+## Implemented reader decision
+
+V2 identity is `recorder_run_id:record_seq`. File rotation does not reset the
+sequence, while a recorder restart creates a new run ID. The reader rejects
+duplicate persisted IDs, gaps, non-contiguous file parts, mid-file run changes,
+and malformed schemas. Legacy payloads are never deduplicated.
+
+## Remaining review
 
 Please focus feedback on these decisions:
 
-1. Should event identity be `run_id:file_part:record_seq`, or should the reader also
-   hash raw row bytes?
-2. What manifest fields are sufficient to prove rotation continuity?
-3. Should malformed rows stop the full session or be journaled and skipped?
-4. How should the API expose control events such as reconnects and writer restarts?
-5. What iterator and state types make accidental timestamp sorting difficult?
-6. Which invariants belong in the recorder, the reader, and the session certifier?
+1. What signed or hashed manifest fields are sufficient to certify raw files?
+2. How should reconnect and writer-error control events be represented?
+3. What session-level completeness rules require feed-specific metadata?
+4. Should a separate audit sink journal rejected rows before fail-closed exit?
 
 ## Definition of done
 
-- All expected-failure tests become ordinary passing tests.
+- All original expected-failure tests pass normally.
 - A synthetic 10-million-row fixture can be streamed with bounded memory.
 - Replaying the same manifest twice produces byte-identical normalized output and
   certificate hashes.
 - Every physical input row maps to exactly one event ID or one explicit rejection.
 - Quote reconstruction is deterministic and never uses a later row.
 - Session validation fails on a deleted, repeated, reordered, or truncated file part.
-

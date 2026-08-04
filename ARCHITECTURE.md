@@ -26,14 +26,16 @@ to reorder rows.
 
 ### Recorder
 
-`ninjatrader/CodexResearchDataRecorder.cs` is included to show the current callback
-and file-rotation behavior. The target recorder schema is described in
-`docs/DATA_SCHEMA.md`.
+`ninjatrader/CodexResearchDataRecorder.cs` assigns a v2 event ID before each Bid,
+Ask, or Last callback is written. Its monotonic sequence continues across file
+rotation; a restart creates a new run UUID.
 
 ### Reader
 
-The current pandas loader is deliberately retained as the legacy implementation.
-The proposed streaming API should coexist with it until callers are migrated.
+`iter_ninjatrader_event_exports()` is the ordering authority. It reads one CSV row
+at a time, validates v2 identity and rotations, and never sorts by timestamp or
+deduplicates by payload. `load_ninjatrader_event_exports()` is the materializing
+pandas adapter for callers that still need a DataFrame.
 
 ### State machine
 
@@ -50,4 +52,3 @@ must fail closed and explain every rejection with stable machine-readable codes.
 
 The disarmed bridge source is included only to document the eventual protocol
 boundary. Order submission is outside the current review objective.
-

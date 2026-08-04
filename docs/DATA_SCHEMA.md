@@ -9,55 +9,50 @@ timestamp_utc_ns,instrument,event_type,price,volume,state
 This is enough to inspect real-time Bid, Ask, and Last callbacks, but it cannot by
 itself prove recorder continuity or stable identity across rotated files.
 
-## Proposed event row
+## V2 event row
 
 ```text
-schema_version
-run_id
-file_part
-record_seq
-event_id
-source_time_utc_ns
-receive_time_utc_ns
-receive_monotonic_ticks
-feed_family
-connection_name
-instrument_full_name
-contract_month
-trading_session_date
-event_type
-event_price
-event_size
-best_bid_after
-best_ask_after
-best_bid_size_after
-best_ask_size_after
-market_state
-connection_state
-is_reset
+schema_version,recorder_run_id,file_part,record_seq,event_id,timestamp_utc_ns,receive_time_utc_ns,instrument,event_type,price,volume,state
 ```
+
+`timestamp_utc_ns` remains the provider/source time for compatibility. The
+recorder captures `receive_time_utc_ns` independently when the callback is
+handled. Extended feed, connection, and session metadata belongs in the future
+manifest rather than being inferred by the reader.
 
 ## Ordering rule
 
-`record_seq` and manifest file-part order define causality. Source time is retained
-for analysis and quality reporting but must never reorder callbacks.
+Caller-supplied manifest position, physical row order, and continuous `record_seq`
+define causality. `file_part` must start at zero and increase by one at rotation.
+Source time is retained for analysis and quality reporting but never reorders rows.
 
 ## Identity rule
 
-The initial proposal is:
+The persisted identity is:
 
 ```text
-event_id = run_id:file_part:record_seq
+event_id = recorder_run_id:record_seq
 ```
 
-A raw-row hash can be stored separately for integrity. It cannot replace the event
-ID because two legitimate callbacks may have identical contents.
+The sequence is not reset by file rotation. A recorder restart creates a new run
+ID and begins again at sequence one and file part zero. The ID is assigned before
+the row is written; any retry of that same record must retain the original ID.
+
+A raw-row hash may be stored separately for integrity, but it cannot replace event
+identity because two legitimate callbacks may have identical contents.
+
+Legacy rows receive `legacy:<manifest-position>:<physical-row>` positional IDs.
+These IDs make replay deterministic for an unchanged manifest. They do not prove
+that two content-identical legacy rows are or are not duplicate writes, so the
+reader preserves every one.
 
 ## Quote state
 
-Bid and ask are updated independently. The normalized row describes state after the
-current callback. A quote is executable only when both sides are initialized and
-`best_ask_after > best_bid_after`.
+Bid and ask are updated independently. The normalized Python event describes state
+after the current callback as `INCOMPLETE`, `VALID`, `LOCKED`, or `CROSSED`. A quote
+is executable only when both sides are initialized and ask is greater than bid.
+The state machine clears at every v2 recorder-run boundary because unobserved
+callbacks may exist between runs. Legacy files cannot prove restart boundaries.
 
 ## File manifest
 
@@ -71,4 +66,3 @@ Every finalized part should include:
 - First/last source and receive timestamps.
 - Previous-part SHA-256 and current-file SHA-256.
 - Clean-close status and writer-error count.
-

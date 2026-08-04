@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
-import pytest
 
 from video_trader.data.ninjatrader_events import load_ninjatrader_event_exports
 
@@ -12,7 +11,6 @@ def _write_events(path: Path, rows: list[dict[str, object]]) -> None:
     pd.DataFrame(rows).to_csv(path, index=False)
 
 
-@pytest.mark.xfail(reason="legacy loader sorts by source time instead of callback order")
 def test_loader_preserves_physical_order_when_source_time_regresses(
     tmp_path: Path,
 ) -> None:
@@ -42,9 +40,10 @@ def test_loader_preserves_physical_order_when_source_time_regresses(
     events = load_ninjatrader_event_exports([path])
 
     assert events["event_type"].tolist() == ["BID", "ASK"]
+    assert events["source_time_regression"].tolist() == [False, True]
+    assert events["physical_row"].tolist() == [2, 3]
 
 
-@pytest.mark.xfail(reason="legacy loader removes physically separate repeated callbacks")
 def test_loader_preserves_identical_physical_quote_callbacks(tmp_path: Path) -> None:
     path = tmp_path / "events.csv"
     repeated = {
@@ -60,4 +59,8 @@ def test_loader_preserves_identical_physical_quote_callbacks(tmp_path: Path) -> 
     events = load_ninjatrader_event_exports([path])
 
     assert len(events) == 2
-
+    assert events["event_id"].is_unique
+    assert events["event_id"].tolist() == [
+        "legacy:000000:000000000002",
+        "legacy:000000:000000000003",
+    ]

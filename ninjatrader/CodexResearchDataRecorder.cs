@@ -17,7 +17,8 @@ namespace NinjaTrader.NinjaScript.Strategies
     public class CodexResearchDataRecorder : Strategy
     {
         private const string BarsHeader = "timestamp_utc_ns,instrument,open,high,low,close,volume,state";
-        private const string EventsHeader = "timestamp_utc_ns,instrument,event_type,price,volume,state";
+        private const int EventSchemaVersion = 2;
+        private const string EventsHeader = "schema_version,recorder_run_id,file_part,record_seq,event_id,timestamp_utc_ns,receive_time_utc_ns,instrument,event_type,price,volume,state";
         private const string DepthHeader = "timestamp_utc_ns,instrument,side,operation,position,price,volume,state";
 
         private readonly object sync = new object();
@@ -31,6 +32,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         private int barsPart;
         private int eventsPart;
         private int depthPart;
+        private long eventsRecordSequence;
         private long barsRowsSinceFlush;
         private long eventsRowsSinceFlush;
         private long depthRowsSinceFlush;
@@ -134,8 +136,15 @@ namespace NinjaTrader.NinjaScript.Strategies
             else return;
             lock (sync)
             {
+                // Identity belongs to the callback, not its payload. Assign it once
+                // before writing so a future retry can reuse the same event ID.
+                long recordSequence = ++eventsRecordSequence;
+                string eventId = string.Format(CultureInfo.InvariantCulture,
+                    "{0}:{1:D20}", runId, recordSequence);
                 eventsWriter.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                    "{0},{1},{2},{3:R},{4},{5}", UnixNanos(e.Time), Instrument.FullName,
+                    "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9:R},{10},{11}",
+                    EventSchemaVersion, runId, eventsPart, recordSequence, eventId,
+                    UnixNanos(e.Time), UnixNanos(DateTime.UtcNow), Instrument.FullName,
                     type, e.Price, (long)e.Volume, State));
                 eventsRowsSinceFlush++;
                 FlushAndRotateIfNeeded(ref eventsWriter, ref eventsRowsSinceFlush,
@@ -182,7 +191,10 @@ namespace NinjaTrader.NinjaScript.Strategies
             outputDirectory = Path.Combine(docs, "trainedData", "autonomous_bot",
                 "chatgptIdealNinjaTrader", "cache", "ninjatrader_v2", "raw", instrumentKey);
             Directory.CreateDirectory(outputDirectory);
-            runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssZ", CultureInfo.InvariantCulture);
+            // A restart creates a new run identity. The timestamp keeps filenames
+            // inspectable while the GUID prevents collisions between rapid restarts.
+            runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffffffZ", CultureInfo.InvariantCulture)
+                + "-" + Guid.NewGuid().ToString("N");
             barsWriter = NewWriter("bars", barsPart, BarsHeader);
             if (RecordEventStream)
                 eventsWriter = NewWriter("events", eventsPart, EventsHeader);
