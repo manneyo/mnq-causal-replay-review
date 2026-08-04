@@ -19,11 +19,13 @@ namespace NinjaTrader.NinjaScript.Strategies
         private const string BarsHeader = "timestamp_utc_ns,instrument,open,high,low,close,volume,state";
         private const int EventSchemaVersion = 2;
         private const string EventsHeader = "schema_version,recorder_run_id,file_part,record_seq,event_id,timestamp_utc_ns,receive_time_utc_ns,instrument,event_type,price,volume,state";
+        private const string ControlHeader = "schema_version,recorder_run_id,control_seq,receive_time_utc_ns,instrument,control_type,status,connection_name,details";
         private const string DepthHeader = "timestamp_utc_ns,instrument,side,operation,position,price,volume,state";
 
         private readonly object sync = new object();
         private StreamWriter barsWriter;
         private StreamWriter eventsWriter;
+        private StreamWriter controlWriter;
         private StreamWriter depthWriter;
         private string outputDirectory;
         private string instrumentKey;
@@ -33,6 +35,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         private int eventsPart;
         private int depthPart;
         private long eventsRecordSequence;
+        private long controlSequence;
         private long barsRowsSinceFlush;
         private long eventsRowsSinceFlush;
         private long depthRowsSinceFlush;
@@ -97,6 +100,13 @@ namespace NinjaTrader.NinjaScript.Strategies
             else if (State == State.DataLoaded)
             {
                 OpenFiles();
+                RecordControl("RUN_START", "STARTED", CurrentConnectionName(), "");
+                RecordCurrentConnections();
+            }
+            else if (State == State.Transition || State == State.Realtime)
+            {
+                RecordControl("STATE_CHANGE", State.ToString().ToUpperInvariant(),
+                    CurrentConnectionName(), "");
             }
             else if (State == State.Terminated)
             {
@@ -136,20 +146,46 @@ namespace NinjaTrader.NinjaScript.Strategies
             else return;
             lock (sync)
             {
-                // Identity belongs to the callback, not its payload. Assign it once
-                // before writing so a future retry can reuse the same event ID.
-                long recordSequence = ++eventsRecordSequence;
-                string eventId = string.Format(CultureInfo.InvariantCulture,
-                    "{0}:{1:D20}", runId, recordSequence);
-                eventsWriter.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                    "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9:R},{10},{11}",
-                    EventSchemaVersion, runId, eventsPart, recordSequence, eventId,
-                    UnixNanos(e.Time), UnixNanos(DateTime.UtcNow), Instrument.FullName,
-                    type, e.Price, (long)e.Volume, State));
-                eventsRowsSinceFlush++;
-                FlushAndRotateIfNeeded(ref eventsWriter, ref eventsRowsSinceFlush,
-                    ref eventsPart, "events", EventsHeader);
+                try
+                {
+                    // Identity belongs to the callback, not its payload. Assign it once
+                    // before writing so a future retry can reuse the same event ID.
+                    long recordSequence = ++eventsRecordSequence;
+                    string eventId = string.Format(CultureInfo.InvariantCulture,
+                        "{0}:{1:D20}", runId, recordSequence);
+                    eventsWriter.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                        "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9:R},{10},{11}",
+                        EventSchemaVersion, runId, eventsPart, recordSequence, eventId,
+                        UnixNanos(e.Time), UnixNanos(DateTime.UtcNow), Instrument.FullName,
+                        type, e.Price, (long)e.Volume, State));
+                    eventsRowsSinceFlush++;
+                    FlushAndRotateIfNeeded(ref eventsWriter, ref eventsRowsSinceFlush,
+                        ref eventsPart, "events", EventsHeader);
+                }
+                catch (Exception ex)
+                {
+                    WriteControlUnsafe("WRITER_ERROR", "ERROR", CurrentConnectionName(),
+                        "events: " + ex.Message);
+                    Print("CodexResearchDataRecorder EVENT_WRITER_ERROR " + ex.Message);
+                    try { if (eventsWriter != null) eventsWriter.Close(); } catch { }
+                    eventsWriter = null;
+                }
             }
+        }
+
+        protected override void OnConnectionStatusUpdate(
+            ConnectionStatusEventArgs connectionStatusUpdate)
+        {
+            if (connectionStatusUpdate == null || connectionStatusUpdate.Connection == null)
+                return;
+            string name = connectionStatusUpdate.Connection.Options.Name;
+            string details = string.Format(CultureInfo.InvariantCulture,
+                "order_status={0};price_status={1};error={2};native_error={3}",
+                connectionStatusUpdate.Status, connectionStatusUpdate.PriceStatus,
+                connectionStatusUpdate.Error, connectionStatusUpdate.NativeError);
+            RecordControl("CONNECTION",
+                connectionStatusUpdate.PriceStatus.ToString().ToUpperInvariant(),
+                name, details);
         }
 
         protected override void OnMarketDepth(MarketDepthEventArgs e)
@@ -195,6 +231,7 @@ namespace NinjaTrader.NinjaScript.Strategies
             // inspectable while the GUID prevents collisions between rapid restarts.
             runId = DateTime.UtcNow.ToString("yyyyMMddTHHmmssfffffffZ", CultureInfo.InvariantCulture)
                 + "-" + Guid.NewGuid().ToString("N");
+            controlWriter = NewWriter("controls", 0, ControlHeader);
             barsWriter = NewWriter("bars", barsPart, BarsHeader);
             if (RecordEventStream)
                 eventsWriter = NewWriter("events", eventsPart, EventsHeader);
@@ -301,15 +338,107 @@ namespace NinjaTrader.NinjaScript.Strategies
         {
             lock (sync)
             {
+                bool clean = true;
                 foreach (StreamWriter writer in new [] { barsWriter, eventsWriter, depthWriter })
                 {
-                    try { if (writer != null) { writer.Flush(); writer.Close(); } } catch { }
+                    try
+                    {
+                        if (writer != null) { writer.Flush(); writer.Close(); }
+                    }
+                    catch (Exception ex)
+                    {
+                        clean = false;
+                        WriteControlUnsafe("WRITER_ERROR", "ERROR", CurrentConnectionName(),
+                            "close: " + ex.Message);
+                    }
                 }
+                WriteControlUnsafe("RUN_STOP", clean ? "CLEAN" : "ERROR",
+                    CurrentConnectionName(), "");
+                try
+                {
+                    if (controlWriter != null)
+                    {
+                        controlWriter.Flush();
+                        controlWriter.Close();
+                    }
+                }
+                catch { }
                 if (depthEventsDropped > 0)
                     Print(string.Format(CultureInfo.InvariantCulture,
                         "CodexResearchDataRecorder DEPTH_DROPPED_TOTAL instrument={0} dropped={1}",
                         Instrument.FullName, depthEventsDropped));
             }
+        }
+
+        private void RecordControl(string controlType, string status,
+                                   string connectionName, string details)
+        {
+            lock (sync)
+            {
+                WriteControlUnsafe(controlType, status, connectionName, details);
+            }
+        }
+
+        private void WriteControlUnsafe(string controlType, string status,
+                                        string connectionName, string details)
+        {
+            if (controlWriter == null || string.IsNullOrEmpty(runId))
+                return;
+            try
+            {
+                long sequence = ++controlSequence;
+                controlWriter.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                    "{0},{1},{2},{3},{4},{5},{6},{7},{8}", EventSchemaVersion,
+                    Csv(runId), sequence, UnixNanos(DateTime.UtcNow),
+                    Csv(Instrument.FullName), Csv(controlType), Csv(status),
+                    Csv(connectionName), Csv(details)));
+                controlWriter.Flush();
+            }
+            catch (Exception ex)
+            {
+                Print("CodexResearchDataRecorder CONTROL_WRITER_ERROR " + ex.Message);
+            }
+        }
+
+        private string CurrentConnectionName()
+        {
+            try
+            {
+                if (Account != null && Account.Connection != null &&
+                    Account.Connection.Options != null)
+                    return Account.Connection.Options.Name;
+            }
+            catch { }
+            return "UNKNOWN";
+        }
+
+        private void RecordCurrentConnections()
+        {
+            try
+            {
+                lock (NinjaTrader.Cbi.Connection.Connections)
+                {
+                    foreach (NinjaTrader.Cbi.Connection connection in
+                             NinjaTrader.Cbi.Connection.Connections)
+                    {
+                        RecordControl("CONNECTION",
+                            connection.PriceStatus.ToString().ToUpperInvariant(),
+                            connection.Options.Name, "startup_snapshot");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                RecordControl("CONNECTION_SNAPSHOT", "ERROR", "UNKNOWN", ex.Message);
+            }
+        }
+
+        private static string Csv(string value)
+        {
+            string text = value ?? "";
+            if (text.IndexOfAny(new [] { ',', '"', '\r', '\n' }) < 0)
+                return text;
+            return "\"" + text.Replace("\"", "\"\"") + "\"";
         }
 
         private static long UnixNanos(DateTime value)

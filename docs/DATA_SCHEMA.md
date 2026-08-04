@@ -66,3 +66,17 @@ Every finalized part should include:
 - First/last source and receive timestamps.
 - Previous-part SHA-256 and current-file SHA-256.
 - Clean-close status and writer-error count.
+
+The v2 recorder now writes a separate control journal:
+
+```text
+schema_version,recorder_run_id,control_seq,receive_time_utc_ns,instrument,control_type,status,connection_name,details
+```
+
+It records run start/stop, state transitions, connection snapshots and changes,
+and writer errors. `scripts/certify_session.py` combines that journal with the
+ordered event parts, their SHA-256 hash chain and the recorder-source SHA-256 to
+produce a deterministic machine-readable certificate. A session fails closed if
+the expected connection is never observed, a writer/connection failure occurs,
+the receive clock regresses, a configured receive gap is exceeded, RTH boundaries
+are missing, or replay identity validation fails.

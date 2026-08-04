@@ -21,7 +21,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
     public class IntrabarPredictionBridge : Strategy
     {
-        private const string BridgeVersion = "IPB-1.1";
+        private const string BridgeVersion = "IPB-1.2";
         private TcpListener listener;
         private Thread serverThread;
         private volatile bool running;
@@ -35,6 +35,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         private readonly Dictionary<string, int> clientQty = new Dictionary<string, int>();
         private readonly Dictionary<string, double> clientEntryPrice = new Dictionary<string, double>();
         private readonly Dictionary<string, int> clientEntryFilledQty = new Dictionary<string, int>();
+        private readonly Dictionary<string, string> clientState = new Dictionary<string, string>();
         private readonly object snapshotLock = new object();
         private bool hasCompletedBar;
         private DateTime completedBarTime;
@@ -46,6 +47,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         private long eventSequence;
         private int listenPort = 5556;
         private int maxEntriesPerDirection = 10;
+        private int maxContracts = 1;
         private int maxQueueDepth = 100;
         private bool tradingEnabled;
         private bool drawSignals = true;
@@ -122,10 +124,27 @@ namespace NinjaTrader.NinjaScript.Strategies
             string clientId = ResolveClientId(order);
             if (string.IsNullOrEmpty(clientId)) return;
             if (orderState == OrderState.Accepted || orderState == OrderState.Working)
+            {
+                lock (eventLock)
+                {
+                    string state;
+                    if (!clientState.TryGetValue(clientId, out state)
+                        || (state != "OPEN" && state != "CLOSED"))
+                        clientState[clientId] = "ACCEPTED";
+                }
                 AppendEvent("ACCEPTED", clientId, time, quantity, averageFillPrice, orderState.ToString());
-            else if (orderState == OrderState.Rejected)
+            }
+            else if (orderState == OrderState.Rejected || orderState == OrderState.Cancelled)
+            {
+                lock (eventLock)
+                {
+                    string state;
+                    if (!clientState.TryGetValue(clientId, out state) || state != "CLOSED")
+                        clientState[clientId] = "REJECTED";
+                }
                 AppendEvent("REJECTED", clientId, time, quantity, averageFillPrice,
                     error + ":" + (nativeError ?? ""));
+            }
         }
 
         protected override void OnExecutionUpdate(
@@ -155,6 +174,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                         ? (previousPrice * previousQty + price * quantity) / totalQty
                         : price;
                     clientEntryFilledQty[clientId] = totalQty;
+                    clientState[clientId] = "OPEN";
                 }
                 else if (clientEntryPrice.ContainsKey(clientId))
                 {
@@ -164,6 +184,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                     int remaining = clientEntryFilledQty.ContainsKey(clientId)
                         ? Math.Max(0, clientEntryFilledQty[clientId] - quantity) : 0;
                     clientEntryFilledQty[clientId] = remaining;
+                    clientState[clientId] = remaining > 0 ? "OPEN" : "CLOSED";
                 }
             }
             AppendEvent(isExit ? "CLOSED" : "FILLED", clientId, time, quantity, price,
@@ -204,6 +225,23 @@ namespace NinjaTrader.NinjaScript.Strategies
                     realizedPnl));
                 if (eventLog.Count > 2000) eventLog.RemoveAt(0);
             }
+        }
+
+        private int CountWorkingAccountOrders()
+        {
+            if (Account == null || Instrument == null) return 0;
+            int count = 0;
+            foreach (Order order in Account.Orders)
+            {
+                if (order == null || order.Instrument == null
+                    || order.Instrument.FullName != Instrument.FullName)
+                    continue;
+                string state = order.OrderState.ToString();
+                if (state != "Filled" && state != "Cancelled"
+                    && state != "Rejected" && state != "Unknown")
+                    count++;
+            }
+            return count;
         }
 
         private void StartServer()
@@ -285,8 +323,13 @@ namespace NinjaTrader.NinjaScript.Strategies
                 return "SAFETY " + (simOnly ? "SIM_ONLY" : "NON_SIM") + " "
                     + (tradingEnabled ? "ARMED" : "DISARMED");
             }
+            if (action == "ACCOUNT")
+                return Account == null || string.IsNullOrEmpty(Account.Name)
+                    ? "ACCOUNT NONE" : "ACCOUNT " + Account.Name;
             if (action == "STATUS")
-                return Position.MarketPosition + " " + Position.Quantity;
+                return "STATUS " + PositionAccount.MarketPosition + " " + PositionAccount.Quantity;
+            if (action == "ORDERS")
+                return "ORDERS " + CountWorkingAccountOrders();
             if (action == "INSTRUMENT")
                 return Instrument == null || Instrument.MasterInstrument == null
                     ? "INSTRUMENT NONE"
@@ -321,25 +364,34 @@ namespace NinjaTrader.NinjaScript.Strategies
                 }
                 return pending.Count == 0 ? "EVENTS NONE" : "EVENTS " + string.Join(";", pending);
             }
-            if (!tradingEnabled) return "ERR DISARMED";
+            if (action == "EVENTRANGE")
+            {
+                lock (eventLock)
+                {
+                    long oldest = 0;
+                    if (eventLog.Count > 0)
+                    {
+                        string[] fields = eventLog[0].Split('|');
+                        long.TryParse(fields[0], out oldest);
+                    }
+                    return "EVENTRANGE " + oldest + " " + eventSequence;
+                }
+            }
+            if (action == "CLIENT")
+            {
+                if (parts.Length != 2) return "ERR CLIENT_FORMAT";
+                string lookupId = Sanitize(parts[1]);
+                if (string.IsNullOrEmpty(lookupId)) return "ERR CLIENT_ID";
+                lock (eventLock)
+                {
+                    string state;
+                    return "CLIENT " + lookupId + " "
+                        + (clientState.TryGetValue(lookupId, out state) ? state : "UNKNOWN");
+                }
+            }
             if (Account == null || string.IsNullOrEmpty(Account.Name)
                 || !Account.Name.StartsWith("Sim", StringComparison.OrdinalIgnoreCase))
                 return "ERR SIM_ONLY";
-            if (action == "ORDER")
-            {
-                if (parts.Length != 6) return "ERR ORDER_FORMAT";
-                string clientId = Sanitize(parts[1]);
-                if (string.IsNullOrEmpty(clientId)) return "ERR CLIENT_ID";
-                lock (commandLock)
-                {
-                    if (acceptedClientIds.Contains(clientId))
-                        return "ACK " + clientId + " DUPLICATE";
-                    if (commandQueue.Count >= maxQueueDepth) return "ERR QUEUE_FULL";
-                    acceptedClientIds.Add(clientId);
-                    commandQueue.Enqueue(string.Join(" ", parts));
-                }
-                return "ACK " + clientId + " QUEUED";
-            }
             if (action == "EXIT")
             {
                 if (parts.Length != 2) return "ERR EXIT_FORMAT";
@@ -360,6 +412,40 @@ namespace NinjaTrader.NinjaScript.Strategies
                     commandQueue.Enqueue("FLAT ALL");
                 }
                 return "ACK FLAT QUEUED";
+            }
+            if (!tradingEnabled) return "ERR DISARMED";
+            if (action == "ORDER")
+            {
+                if (parts.Length != 6) return "ERR ORDER_FORMAT";
+                string clientId = Sanitize(parts[1]);
+                if (string.IsNullOrEmpty(clientId)) return "ERR CLIENT_ID";
+                int requestedQuantity;
+                if (!int.TryParse(parts[3], out requestedQuantity) || requestedQuantity <= 0)
+                    return "ERR QUANTITY";
+                if (requestedQuantity > Math.Max(1, maxContracts))
+                    return "ERR MAX_CONTRACTS";
+                if (PositionAccount.MarketPosition != MarketPosition.Flat || PositionAccount.Quantity != 0)
+                    return "ERR POSITION_NOT_FLAT";
+                if (CountWorkingAccountOrders() != 0)
+                    return "ERR WORKING_ORDERS";
+                lock (commandLock)
+                {
+                    if (acceptedClientIds.Contains(clientId))
+                        return "ACK " + clientId + " DUPLICATE";
+                    lock (eventLock)
+                    {
+                        foreach (string state in clientState.Values)
+                        {
+                            if (state == "QUEUED" || state == "ACCEPTED" || state == "OPEN")
+                                return "ERR ACTIVE_ORDER";
+                        }
+                    }
+                    if (commandQueue.Count >= maxQueueDepth) return "ERR QUEUE_FULL";
+                    acceptedClientIds.Add(clientId);
+                    lock (eventLock) clientState[clientId] = "QUEUED";
+                    commandQueue.Enqueue(string.Join(" ", parts));
+                }
+                return "ACK " + clientId + " QUEUED";
             }
             return "ERR UNKNOWN_COMMAND";
         }
@@ -404,31 +490,19 @@ namespace NinjaTrader.NinjaScript.Strategies
                 }
                 if (action == "FLAT")
                 {
-                    List<Tuple<string, string, string>> tracked = new List<Tuple<string, string, string>>();
-                    lock (eventLock)
-                    {
-                        foreach (KeyValuePair<string, string> item in signalToClient)
-                        {
-                            int remaining = clientEntryFilledQty.ContainsKey(item.Value)
-                                ? clientEntryFilledQty[item.Value] : 0;
-                            if (remaining > 0)
-                            {
-                                string trackedSide = clientSide.ContainsKey(item.Value)
-                                    ? clientSide[item.Value] : "BUY";
-                                tracked.Add(Tuple.Create(item.Key, item.Value, trackedSide));
-                            }
-                        }
-                    }
-                    foreach (Tuple<string, string, string> item in tracked)
-                    {
-                        string exitSignal = "IPB_Flat_" + item.Item2;
-                        if (item.Item3 == "SELL") ExitShort(exitSignal, item.Item1);
-                        else ExitLong(exitSignal, item.Item1);
-                    }
+                    Account.Flatten(new[] { Instrument });
                     return;
                 }
                 if (action != "ORDER" || parts.Length != 6) return;
                 string clientId = Sanitize(parts[1]);
+                if (!tradingEnabled || Account == null || string.IsNullOrEmpty(Account.Name)
+                    || !Account.Name.StartsWith("Sim", StringComparison.OrdinalIgnoreCase))
+                {
+                    lock (eventLock) clientState[clientId] = "REJECTED";
+                    AppendEvent("REJECTED", clientId, Time[0], 0, Close[0],
+                        "entry execution blocked by safety state");
+                    return;
+                }
                 string side = parts[2].ToUpperInvariant();
                 int quantity;
                 double stopPrice;
@@ -436,8 +510,10 @@ namespace NinjaTrader.NinjaScript.Strategies
                 if (!int.TryParse(parts[3], out quantity)
                     || !double.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out stopPrice)
                     || !double.TryParse(parts[5], NumberStyles.Float, CultureInfo.InvariantCulture, out targetPrice)
-                    || quantity <= 0 || stopPrice <= 0 || targetPrice <= 0)
+                    || quantity <= 0 || quantity > Math.Max(1, maxContracts)
+                    || stopPrice <= 0 || targetPrice <= 0)
                 {
+                    lock (eventLock) clientState[clientId] = "REJECTED";
                     AppendEvent("REJECTED", clientId, Time[0], Math.Max(quantity, 0), Close[0], "invalid order values");
                     return;
                 }
@@ -446,6 +522,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                     : stopPrice > Close[0] && targetPrice < Close[0];
                 if ((side != "BUY" && side != "SELL") || !validBracket)
                 {
+                    lock (eventLock) clientState[clientId] = "REJECTED";
                     AppendEvent("REJECTED", clientId, Time[0], quantity, Close[0], "invalid bracket orientation");
                     return;
                 }
@@ -506,6 +583,13 @@ namespace NinjaTrader.NinjaScript.Strategies
         {
             get { return maxEntriesPerDirection; }
             set { maxEntriesPerDirection = value; }
+        }
+
+        [NinjaScriptProperty]
+        public int MaxContracts
+        {
+            get { return maxContracts; }
+            set { maxContracts = value; }
         }
 
         [NinjaScriptProperty]

@@ -57,6 +57,22 @@ python3.11 -m venv .venv
 
 All tests, including the two former expected failures, must pass normally.
 
+After a v2 run has closed cleanly, generate its deterministic evidence certificate:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\certify_session.py RUN_events.csv `
+  --controls RUN_controls.csv `
+  --instrument "MNQ 09-26" `
+  --connection "Rithmic" `
+  --session-start 2026-08-04T13:30:00Z `
+  --session-end 2026-08-04T20:00:00Z `
+  --recorder-source ninjatrader\CodexResearchDataRecorder.cs `
+  --output session_certificate.json
+```
+
+Use the exact connection name written by NinjaTrader. A failing certificate is
+retained as audit evidence and is not eligible for strategy evaluation.
+
 ## Repository map
 
 ```text
@@ -66,11 +82,13 @@ tests/test_streaming_replay.py               Identity and rotation invariants
 samples/synthetic_mnq_events.csv             Synthetic, non-provider test fixture
 scripts/inspect_sample.py                    Constant-memory diagnostic scanner
 scripts/benchmark_streaming.py               Synthetic streaming memory benchmark
+scripts/certify_session.py                   Deterministic fail-closed certificate
 ninjatrader/CodexResearchDataRecorder.cs     V2 source event-identity contract
 ninjatrader/IntrabarPredictionBridge.cs      Disarmed bridge protocol context
 docs/DATA_SCHEMA.md                          Legacy and proposed event contracts
 docs/VIDEO_MECHANICS.md                      Observable mechanics of the reference
 docs/COLLECTION_REQUIREMENTS.md              Data and evidence gates
+docs/REVIEW_STATUS.md                        Solved defects and remaining evidence
 ```
 
 ## Review requested
@@ -83,6 +101,10 @@ Reviewers are specifically asked to challenge:
 - How to reconstruct bid and ask state without inventing simultaneous quotes.
 - How to certify complete RTH sessions and detect recorder discontinuities.
 - How to expose a streaming iterator while keeping the existing pandas adapter.
+
+The current solved/missing matrix is maintained in
+[docs/REVIEW_STATUS.md](docs/REVIEW_STATUS.md). The next bounded review target is
+whether the recorder and certifier could incorrectly certify an incomplete session.
 
 The video referenced in the project is not committed. It can be shared separately
 when redistribution is permitted. The code review must remain reproducible without

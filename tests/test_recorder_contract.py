@@ -12,3 +12,8 @@ def test_recorder_persists_v2_identity_before_each_event_write() -> None:
     assert "long recordSequence = ++eventsRecordSequence;" in source
     assert '"{0}:{1:D20}", runId, recordSequence' in source
     assert 'Guid.NewGuid().ToString("N")' in source
+    assert "control_seq,receive_time_utc_ns" in source
+    assert 'RecordControl("RUN_START", "STARTED"' in source
+    assert 'WriteControlUnsafe("RUN_STOP", clean ? "CLEAN" : "ERROR"' in source
+    assert 'WriteControlUnsafe("WRITER_ERROR", "ERROR"' in source
+    assert "protected override void OnConnectionStatusUpdate" in source
