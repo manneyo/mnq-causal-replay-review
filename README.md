@@ -89,6 +89,7 @@ docs/DATA_SCHEMA.md                          Legacy and proposed event contracts
 docs/VIDEO_MECHANICS.md                      Observable mechanics of the reference
 docs/COLLECTION_REQUIREMENTS.md              Data and evidence gates
 docs/REVIEW_STATUS.md                        Solved defects and remaining evidence
+docs/PYTHON_DISCORD_FOLLOWUP.md              Bounded external-review request
 ```
 
 ## Review requested
