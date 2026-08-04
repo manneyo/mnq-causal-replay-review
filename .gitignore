@@ -1,0 +1,40 @@
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Private or generated market research material
+/data/
+/reports/
+/artifacts/
+/logs/
+/tmp/
+/graphify-out/
+/research/creator_materials/
+*.db
+*.sqlite*
+*.dbn
+*.jsonl
+*.parquet
+*.mp4
+*.mov
+*.pdf
+
+# Keep only deliberately reviewed synthetic fixtures
+*.csv
+!samples/*.csv
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
