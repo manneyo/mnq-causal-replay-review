@@ -1,0 +1,74 @@
+﻿{
+    "aggregation_audit":  {
+                              "events_seen":  5185423,
+                              "first_receive_time_utc_ns":  1785934800007339800,
+                              "first_record_seq":  1,
+                              "invalid_quote_events":  176738,
+                              "last_receive_time_utc_ns":  1785960001991263900,
+                              "last_record_seq":  5185423,
+                              "realtime_events_in_window":  4270593,
+                              "source_time_regressions":  231476
+                          },
+    "arms":  [
+                 "candidate_1",
+                 "candidate_2",
+                 "candidate_3",
+                 "matched_random"
+             ],
+    "claim":  "Mechanics and in-sample diagnostics only; not holdout evidence.",
+    "cost_model":  {
+                       "adverse_ticks_per_fill":  3.0,
+                       "bucket_milliseconds":  250,
+                       "maximum_fill_delay_milliseconds":  1000,
+                       "minimum_signal_score_ticks":  12.0,
+                       "point_value":  2.0,
+                       "round_trip_fee_usd":  1.9,
+                       "safety_margin_ticks":  2.0,
+                       "stop_ticks":  16.0,
+                       "target_ticks":  24.0,
+                       "tick_size":  0.25
+                   },
+    "decision_intervals_milliseconds":  [
+                                            250,
+                                            1000,
+                                            5000,
+                                            10000
+                                        ],
+    "full_cost_ticks":  9.8,
+    "maximum_holds_seconds":  [
+                                  15,
+                                  60,
+                                  180
+                              ],
+    "quote_bucket_count":  100375,
+    "source_manifest":  [
+                            {
+                                "captured_prefix_bytes":  269274494,
+                                "captured_prefix_sha256":  "fc782e6ceacac462450c038bc717ed98e3ea10ccd77f89da09a97bf5d492bae8",
+                                "path":  "20260805T0649146631153Z-b0d43aee3387417c8ee93895826800db_events.csv"
+                            },
+                            {
+                                "captured_prefix_bytes":  268500476,
+                                "captured_prefix_sha256":  "fcef8d3328c8075c81e6c1dcc69b4ebf0c82332c3a56ad2b1c138048d8e591d5",
+                                "path":  "20260805T0649146631153Z-b0d43aee3387417c8ee93895826800db_events_p0001.csv"
+                            },
+                            {
+                                "captured_prefix_bytes":  269527566,
+                                "captured_prefix_sha256":  "8f3fbc5db2a8efc43ca3ec11534ecbd9a0421567962fd8a3c69b729f16df4083",
+                                "path":  "20260805T0649146631153Z-b0d43aee3387417c8ee93895826800db_events_p0002.csv"
+                            },
+                            {
+                                "captured_prefix_bytes":  269374585,
+                                "captured_prefix_sha256":  "4bb832b866f597558970b1f611c7ae378a50811b01041ddd08aef4e9b49e415b",
+                                "path":  "20260805T0649146631153Z-b0d43aee3387417c8ee93895826800db_events_p0003.csv"
+                            },
+                            {
+                                "captured_prefix_bytes":  147447045,
+                                "captured_prefix_sha256":  "859b30539a983c4b4a360ccf04dcea54ba21a9d8181b9651630907c46ab238b5",
+                                "path":  "20260805T0649146631153Z-b0d43aee3387417c8ee93895826800db_events_p0004.csv"
+                            }
+                        ],
+    "status":  "IN_SAMPLE_DIAGNOSTIC_ONLY",
+    "tested_configurations":  48,
+    "public_release_note":  "Raw quote buckets and full trade ledger are retained locally and are not published because feed-data redistribution rights are not established."
+}

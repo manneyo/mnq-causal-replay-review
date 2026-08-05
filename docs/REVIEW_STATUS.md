@@ -22,11 +22,19 @@ exist. It is intentionally not a profitability claim.
 - **VERIFIED:** `EXIT` and `FLAT` are allowed as Sim-account risk-reduction commands
   while new entries are disarmed. `FLAT` uses account-level instrument flattening.
 - **VERIFIED:** All public synthetic contract tests pass.
+- **OPERATOR-VERIFIED:** The current NinjaTrader recorder and disarmed bridge
+  compiled and loaded in the installed NinjaTrader version.
+- **VERIFIED:** Schema-v3 forward decisions are hash-sealed before linked intents
+  and include complete model inputs plus explicit evidence-tier fields.
+- **VERIFIED:** The Sim101 promotion audit rejects missing, malformed, duplicate,
+  post-intent, unlinked, repeated-intent, and non-top-of-book decisions. It also
+  requires the declared next quote to be journaled after the signal and before
+  the linked intent and fill.
+- **VERIFIED:** The August 5 event replay reproduced intrabar marker activity, but
+  all 48 tested configurations were negative after modeled costs.
 
 ## Still missing
 
-- **MISSING:** A successful NinjaTrader compile of the current recorder and bridge
-  in the operator's installed NinjaTrader version.
 - **MISSING:** A fresh certified MNQ Rithmic RTH capture made by the current recorder.
 - **MISSING:** At least 60 complete, correctly rolled, certified MNQ top-of-book RTH
   sessions from the same feed family intended for Sim101.
@@ -47,6 +55,8 @@ exist. It is intentionally not a profitability claim.
 - Live-trading readiness: **OUT OF SCOPE and locked**
 - Similarity to the video's visible mechanics: **IMPLEMENTABLE, not yet validated as an edge**
 
-The next useful external review is narrow: challenge the V2 recorder/control-journal
-contract and `session_certification.py` for any way a missing, duplicated, reordered,
-or disconnected callback could still receive a passing certificate.
+The next useful external review is narrow: challenge the schema-v3 journal and
+promotion audit in `audit_snapshot/20260805/` for any path that could submit an
+intent before its decision, omit an RTH no-trade decision, or label completed-bar
+data as top-of-book evidence. The full external-audit response is in
+`docs/EXTERNAL_AUDIT_RESPONSE_20260805.md`.

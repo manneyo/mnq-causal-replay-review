@@ -90,6 +90,10 @@ docs/VIDEO_MECHANICS.md                      Observable mechanics of the referen
 docs/COLLECTION_REQUIREMENTS.md              Data and evidence gates
 docs/REVIEW_STATUS.md                        Solved defects and remaining evidence
 docs/PYTHON_DISCORD_FOLLOWUP.md              Bounded external-review request
+docs/EXTERNAL_AUDIT_RESPONSE_20260805.md      Verified response to the external audit
+docs/EVENT_DIAGNOSTIC_REPORT_20260805.md      One-session development diagnostic
+samples/august5_diagnostic_metrics.csv        Aggregate results; no provider events
+audit_snapshot/20260805/                      Read-only snapshot of remediated evidence code
 ```
 
 ## Review requested
@@ -105,7 +109,10 @@ Reviewers are specifically asked to challenge:
 
 The current solved/missing matrix is maintained in
 [docs/REVIEW_STATUS.md](docs/REVIEW_STATUS.md). The next bounded review target is
-whether the recorder and certifier could incorrectly certify an incomplete session.
+whether the schema-v3 decision journal and Sim101 promotion audit can incorrectly
+accept a missing, post-intent, unlinked, or non-top-of-book decision. The August 5
+audit response and aggregate metrics are included, but that session remains
+development-only and all tested configurations were negative after costs.
 
 The video referenced in the project is not committed. It can be shared separately
 when redistribution is permitted. The code review must remain reproducible without
