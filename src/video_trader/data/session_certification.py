@@ -88,6 +88,7 @@ class _ControlAudit:
     clean_stop: bool = False
     writer_errors: int = 0
     connection_failures: int = 0
+    out_of_session_connection_failures: int = 0
     provenance_confirmed: bool = False
     observed_connection_name: str | None = None
     observed_provider: str | None = None
@@ -117,6 +118,7 @@ class SessionCertificate:
     maximum_allowed_receive_gap_ns: int
     recorder_run_id: str | None
     event_count: int
+    session_event_count: int
     event_part_count: int
     first_record_seq: int | None
     last_record_seq: int | None
@@ -125,13 +127,17 @@ class SessionCertificate:
     last_source_time_utc_ns: int | None
     first_receive_time_utc_ns: int | None
     last_receive_time_utc_ns: int | None
+    first_session_receive_time_utc_ns: int | None
+    last_session_receive_time_utc_ns: int | None
     maximum_receive_gap_ns: int
+    maximum_run_receive_gap_ns: int
     source_time_regressions: int
     invalid_quote_states: int
     control_event_count: int
     clean_stop_observed: bool
     writer_error_count: int
     connection_failure_count: int
+    out_of_session_connection_failure_count: int
     run_stop_final_record_seq: int | None
     run_stop_event_rows: int | None
     run_stop_final_event_part: int | None
@@ -160,6 +166,7 @@ def certify_session(
     run_ids: set[str] = set()
     file_parts: set[int] = set()
     event_count = 0
+    session_event_count = 0
     first_record_seq: int | None = None
     last_record_seq: int | None = None
     first_source: int | None = None
@@ -167,7 +174,11 @@ def certify_session(
     first_receive: int | None = None
     last_receive: int | None = None
     previous_receive: int | None = None
+    previous_session_receive: int | None = None
+    first_session_receive: int | None = None
+    last_session_receive: int | None = None
     maximum_receive_gap = 0
+    maximum_run_receive_gap = 0
     regressions = 0
     invalid_quotes = 0
 
@@ -193,11 +204,26 @@ def certify_session(
                     if receive < previous_receive:
                         reasons.add("RECEIVE_TIME_REGRESSION")
                     else:
-                        maximum_receive_gap = max(
-                            maximum_receive_gap, receive - previous_receive
+                        maximum_run_receive_gap = max(
+                            maximum_run_receive_gap, receive - previous_receive
                         )
                 previous_receive = receive
                 last_receive = receive
+                if (
+                    requirements.session_start_utc_ns
+                    <= receive
+                    <= requirements.session_end_utc_ns
+                ):
+                    session_event_count += 1
+                    if first_session_receive is None:
+                        first_session_receive = receive
+                    if previous_session_receive is not None:
+                        maximum_receive_gap = max(
+                            maximum_receive_gap,
+                            receive - previous_session_receive,
+                        )
+                    previous_session_receive = receive
+                    last_session_receive = receive
             if first_record_seq is None:
                 first_record_seq = event.record_seq
                 first_source = event.timestamp_utc_ns
@@ -212,11 +238,11 @@ def certify_session(
         reasons.add("NO_EVENTS")
     if len(run_ids) != 1:
         reasons.add("RUN_ID_COUNT_NOT_ONE")
-    if first_receive is not None and first_receive > (
+    if first_session_receive is None or first_session_receive > (
         requirements.session_start_utc_ns + requirements.boundary_tolerance_ns
     ):
         reasons.add("RTH_START_NOT_COVERED")
-    if last_receive is not None and last_receive < (
+    if last_session_receive is None or last_session_receive < (
         requirements.session_end_utc_ns - requirements.boundary_tolerance_ns
     ):
         reasons.add("RTH_END_NOT_COVERED")
@@ -237,7 +263,7 @@ def certify_session(
         event_part_count=len(parts),
     )
     certificate = SessionCertificate(
-        schema_version=2,
+        schema_version=3,
         status="FAIL" if reasons else "PASS",
         reason_codes=tuple(sorted(reasons)),
         expected_instrument=requirements.expected_instrument,
@@ -255,6 +281,7 @@ def certify_session(
         maximum_allowed_receive_gap_ns=requirements.max_receive_gap_ns,
         recorder_run_id=next(iter(run_ids)) if len(run_ids) == 1 else None,
         event_count=event_count,
+        session_event_count=session_event_count,
         event_part_count=len(parts),
         first_record_seq=first_record_seq,
         last_record_seq=last_record_seq,
@@ -263,13 +290,19 @@ def certify_session(
         last_source_time_utc_ns=last_source,
         first_receive_time_utc_ns=first_receive,
         last_receive_time_utc_ns=last_receive,
+        first_session_receive_time_utc_ns=first_session_receive,
+        last_session_receive_time_utc_ns=last_session_receive,
         maximum_receive_gap_ns=maximum_receive_gap,
+        maximum_run_receive_gap_ns=maximum_run_receive_gap,
         source_time_regressions=regressions,
         invalid_quote_states=invalid_quotes,
         control_event_count=control.count,
         clean_stop_observed=control.clean_stop,
         writer_error_count=control.writer_errors,
         connection_failure_count=control.connection_failures,
+        out_of_session_connection_failure_count=(
+            control.out_of_session_connection_failures
+        ),
         run_stop_final_record_seq=control.run_stop_final_record_seq,
         run_stop_event_rows=control.run_stop_event_rows,
         run_stop_final_event_part=control.run_stop_final_event_part,
@@ -368,6 +401,7 @@ def _read_controls(
     count = 0
     writer_errors = 0
     connection_failures = 0
+    out_of_session_connection_failures = 0
     expected_seq = 1
     previous_receive: int | None = None
     start_count = 0
@@ -467,7 +501,14 @@ def _read_controls(
                     if status == "CONNECTED":
                         connected_identity_observed = True
                     elif status != "CONNECTING":
-                        connection_failures += 1
+                        if (
+                            requirements.session_start_utc_ns
+                            <= receive
+                            <= requirements.session_end_utc_ns
+                        ):
+                            connection_failures += 1
+                        else:
+                            out_of_session_connection_failures += 1
     except (csv.Error, OSError, UnicodeError):
         reasons.add("CONTROL_REPLAY_ERROR")
 
@@ -529,6 +570,7 @@ def _read_controls(
         clean_stop=clean_stop,
         writer_errors=writer_errors,
         connection_failures=connection_failures,
+        out_of_session_connection_failures=out_of_session_connection_failures,
         provenance_confirmed=provenance_confirmed,
         observed_connection_name=observed_connection_name,
         observed_provider=observed_provider,

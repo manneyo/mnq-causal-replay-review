@@ -30,6 +30,8 @@ Those operations were unsafe for causal replay. The replacement now:
 - Reconstructs bid and ask independently after each observed callback.
 - Reports source-time regressions without reordering events.
 - Retains a pandas compatibility adapter over the streaming iterator.
+- Validates run-wide identity and rotation while applying coverage, receive-gap,
+  and connection-failure gates to the explicitly declared session window.
 
 See [PROBLEM_STATEMENT.md](PROBLEM_STATEMENT.md) for the exact acceptance criteria.
 
@@ -91,6 +93,7 @@ scripts/benchmark_streaming.py               Synthetic streaming memory benchmar
 scripts/certify_session.py                   Deterministic fail-closed certificate
 scripts/check_bridge_provenance.py           Read-only recorder/bridge identity check
 scripts/audit_certificate_inventory.py       Sixty-session consistency gate
+scripts/locate_receive_gaps.py               Run-wide versus session gap diagnostic
 ninjatrader/CodexResearchDataRecorder.cs     V2 source event-identity contract
 ninjatrader/IntrabarPredictionBridge.cs      Disarmed bridge protocol context
 docs/DATA_SCHEMA.md                          Legacy and proposed event contracts

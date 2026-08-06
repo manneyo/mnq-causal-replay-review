@@ -109,9 +109,12 @@ and must also be checked in the registry and research history.
 
 A session is quarantined for any sequence gap, duplicate event or manifest part,
 missing or empty part, malformed event/control row, receive-time regression,
-excessive receive gap, incomplete RTH boundary, non-realtime row, connection
-failure, writer error, missing/non-final/non-clean `RUN_STOP`, stop-count mismatch,
-or unresolved/mismatched provenance.
+excessive in-session receive gap, incomplete RTH boundary, non-realtime row,
+in-session connection failure, writer error, missing/non-final/non-clean
+`RUN_STOP`, stop-count mismatch, or unresolved/mismatched provenance. Structural
+validation covers the complete recorder run; timing and connection gates apply to
+the declared session so a recovered pre-session interruption is retained and
+reported without falsely invalidating an otherwise complete RTH window.
 
 ## Scope statement
 

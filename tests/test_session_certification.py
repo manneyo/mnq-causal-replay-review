@@ -315,6 +315,47 @@ def test_receive_gap_and_wrong_connection_fail(tmp_path: Path) -> None:
     assert "CONNECTED_FEED_IDENTITY_NOT_OBSERVED" in certificate.reason_codes
 
 
+def test_pre_session_gap_and_recovered_connection_do_not_invalidate_rth(
+    tmp_path: Path,
+) -> None:
+    rows = _events()
+    rows[0]["timestamp_utc_ns"] = 10
+    rows[0]["receive_time_utc_ns"] = 10
+    rows[1]["timestamp_utc_ns"] = 150
+    rows[1]["receive_time_utc_ns"] = 150
+    controls = _controls()
+    controls[0]["receive_time_utc_ns"] = 0
+    controls[1]["receive_time_utc_ns"] = 1
+    lost = dict(controls[1])
+    lost["control_seq"] = 3
+    lost["receive_time_utc_ns"] = 50
+    lost["status"] = "CONNECTIONLOST"
+    recovered = dict(controls[1])
+    recovered["control_seq"] = 4
+    recovered["receive_time_utc_ns"] = 60
+    controls[-1]["control_seq"] = 5
+    controls[-1]["receive_time_utc_ns"] = 210
+    controls = [controls[0], controls[1], lost, recovered, controls[-1]]
+    events = tmp_path / "events.csv"
+    control_path = tmp_path / "controls.csv"
+    _write(events, EVENT_FIELDS, rows)
+    _write(control_path, CONTROL_FIELDS, controls)
+    requirements = replace(
+        _requirements(),
+        session_start_utc_ns=150,
+        session_end_utc_ns=200,
+        max_receive_gap_ns=100,
+    )
+
+    certificate = certify_session([events], control_path, requirements)
+
+    assert certificate.status == "PASS"
+    assert certificate.maximum_run_receive_gap_ns == 140
+    assert certificate.maximum_receive_gap_ns == 50
+    assert certificate.connection_failure_count == 0
+    assert certificate.out_of_session_connection_failure_count == 1
+
+
 def test_full_rth_start_to_clean_stop_passes_end_to_end(tmp_path: Path) -> None:
     start = datetime(2026, 8, 6, 13, 30, tzinfo=timezone.utc)
     end = datetime(2026, 8, 6, 20, 0, tzinfo=timezone.utc)
