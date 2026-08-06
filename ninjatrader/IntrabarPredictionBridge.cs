@@ -21,7 +21,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
     public class IntrabarPredictionBridge : Strategy
     {
-        private const string BridgeVersion = "IPB-1.2";
+        private const string BridgeVersion = "IPB-1.3";
         private TcpListener listener;
         private Thread serverThread;
         private volatile bool running;
@@ -52,6 +52,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         private bool tradingEnabled;
         private bool drawSignals = true;
         private bool enableLogging = true;
+        private string marketDataConnectionName = "";
 
         protected override void OnStateChange()
         {
@@ -67,6 +68,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 ExitOnSessionCloseSeconds = 30;
                 BarsRequiredToTrade = 1;
                 tradingEnabled = false;
+                marketDataConnectionName = "";
             }
             else if (State == State.Configure)
             {
@@ -334,6 +336,12 @@ namespace NinjaTrader.NinjaScript.Strategies
                 return Instrument == null || Instrument.MasterInstrument == null
                     ? "INSTRUMENT NONE"
                     : "INSTRUMENT " + Instrument.MasterInstrument.Name;
+            if (action == "INSTRUMENT_FULL")
+                return Instrument == null
+                    ? "INSTRUMENT_FULL NONE"
+                    : "INSTRUMENT_FULL " + Instrument.FullName;
+            if (action == "PROVENANCE")
+                return ProvenanceResponse();
             if (action == "SNAPSHOT")
             {
                 lock (snapshotLock)
@@ -571,11 +579,62 @@ namespace NinjaTrader.NinjaScript.Strategies
             return builder.ToString();
         }
 
+        private NinjaTrader.Cbi.Connection ResolveDataFeedConnection()
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(marketDataConnectionName))
+                    return null;
+                lock (NinjaTrader.Cbi.Connection.Connections)
+                {
+                    foreach (NinjaTrader.Cbi.Connection connection in
+                             NinjaTrader.Cbi.Connection.Connections)
+                    {
+                        if (connection != null && connection.Options != null &&
+                            string.Equals(connection.Options.Name,
+                                marketDataConnectionName.Trim(),
+                                StringComparison.Ordinal))
+                            return connection;
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private string ProvenanceResponse()
+        {
+            NinjaTrader.Cbi.Connection connection = ResolveDataFeedConnection();
+            string connectionName = string.IsNullOrWhiteSpace(marketDataConnectionName)
+                ? "UNDECLARED" : marketDataConnectionName.Trim();
+            string provider = "UNRESOLVED";
+            string priceStatus = "UNRESOLVED";
+            if (connection != null && connection.Options != null)
+            {
+                connectionName = connection.Options.Name;
+                provider = connection.Options.Provider.ToString();
+                priceStatus = connection.PriceStatus.ToString();
+            }
+            string instrument = Instrument == null ? "NONE" : Instrument.FullName;
+            return "PROVENANCE connection=" + Uri.EscapeDataString(connectionName)
+                + ";provider=" + Uri.EscapeDataString(provider)
+                + ";feed_family=" + Uri.EscapeDataString(provider)
+                + ";instrument=" + Uri.EscapeDataString(instrument)
+                + ";price_status=" + Uri.EscapeDataString(priceStatus);
+        }
+
         [NinjaScriptProperty]
         public int ListenPort
         {
             get { return listenPort; }
             set { listenPort = value; }
+        }
+
+        [NinjaScriptProperty]
+        public string MarketDataConnectionName
+        {
+            get { return marketDataConnectionName; }
+            set { marketDataConnectionName = value ?? ""; }
         }
 
         [NinjaScriptProperty]

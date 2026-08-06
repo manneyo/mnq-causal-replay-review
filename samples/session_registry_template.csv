@@ -1,0 +1,2 @@
+session_date,recorder_run_id,certificate_path,status,instrument,connection_name,provider,feed_family,recorder_source_sha256,used_for_tuning,quarantined,notes
+YYYY-MM-DD,RUN_ID,evidence/certified/YYYY-MM-DD/session_certificate.json,PASS,MNQ CONTRACT,EXACT CONNECTION,EXACT PROVIDER,EXACT PROVIDER,SHA256,FALSE,FALSE,

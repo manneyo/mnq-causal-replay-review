@@ -32,6 +32,8 @@ def main() -> int:
     parser.add_argument("--controls", required=True, type=Path)
     parser.add_argument("--instrument", required=True)
     parser.add_argument("--connection", required=True)
+    parser.add_argument("--provider", required=True)
+    parser.add_argument("--feed-family", required=True)
     parser.add_argument("--session-start", required=True, type=_utc_ns)
     parser.add_argument("--session-end", required=True, type=_utc_ns)
     parser.add_argument("--recorder-source", required=True, type=Path)
@@ -44,6 +46,8 @@ def main() -> int:
     requirements = CertificationRequirements(
         expected_instrument=args.instrument,
         expected_connection_name=args.connection,
+        expected_provider=args.provider,
+        expected_feed_family=args.feed_family,
         recorder_source_sha256=source_hash,
         session_start_utc_ns=args.session_start,
         session_end_utc_ns=args.session_end,

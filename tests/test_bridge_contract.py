@@ -11,7 +11,7 @@ def test_bridge_is_sim_only_disarmed_and_restart_aware() -> None:
         encoding="utf-8"
     )
 
-    assert 'private const string BridgeVersion = "IPB-1.2";' in source
+    assert 'private const string BridgeVersion = "IPB-1.3";' in source
     assert "IPAddress.Loopback" in source
     assert "tradingEnabled = false;" in source
     assert '!Account.Name.StartsWith("Sim"' in source
@@ -21,6 +21,7 @@ def test_bridge_is_sim_only_disarmed_and_restart_aware() -> None:
     assert 'if (action == "ORDERS")' in source
     assert 'if (action == "EVENTRANGE")' in source
     assert 'if (action == "CLIENT")' in source
+    assert 'if (action == "PROVENANCE")' in source
     assert "PositionAccount.MarketPosition" in source
     assert 'return "ERR POSITION_NOT_FLAT";' in source
     assert 'return "ERR WORKING_ORDERS";' in source

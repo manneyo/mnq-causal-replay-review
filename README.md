@@ -57,13 +57,16 @@ python3.11 -m venv .venv
 
 All tests, including the two former expected failures, must pass normally.
 
-After a v2 run has closed cleanly, generate its deterministic evidence certificate:
+After a v2 event run with v3 controls has closed cleanly, generate its
+deterministic evidence certificate:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\certify_session.py RUN_events.csv `
   --controls RUN_controls.csv `
   --instrument "MNQ 09-26" `
-  --connection "Rithmic" `
+  --connection "EXACT NINJATRADER CONNECTION NAME" `
+  --provider "Rithmic" `
+  --feed-family "Rithmic" `
   --session-start 2026-08-04T13:30:00Z `
   --session-end 2026-08-04T20:00:00Z `
   --recorder-source ninjatrader\CodexResearchDataRecorder.cs `
@@ -72,6 +75,9 @@ After a v2 run has closed cleanly, generate its deterministic evidence certifica
 
 Use the exact connection name written by NinjaTrader. A failing certificate is
 retained as audit evidence and is not eligible for strategy evaluation.
+The full installation, collection, certification, bridge-comparison, and
+60-session procedure is in
+[docs/SESSION_COLLECTION_RUNBOOK.md](docs/SESSION_COLLECTION_RUNBOOK.md).
 
 ## Repository map
 
@@ -83,6 +89,8 @@ samples/synthetic_mnq_events.csv             Synthetic, non-provider test fixtur
 scripts/inspect_sample.py                    Constant-memory diagnostic scanner
 scripts/benchmark_streaming.py               Synthetic streaming memory benchmark
 scripts/certify_session.py                   Deterministic fail-closed certificate
+scripts/check_bridge_provenance.py           Read-only recorder/bridge identity check
+scripts/audit_certificate_inventory.py       Sixty-session consistency gate
 ninjatrader/CodexResearchDataRecorder.cs     V2 source event-identity contract
 ninjatrader/IntrabarPredictionBridge.cs      Disarmed bridge protocol context
 docs/DATA_SCHEMA.md                          Legacy and proposed event contracts

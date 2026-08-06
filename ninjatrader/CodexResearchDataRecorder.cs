@@ -1,5 +1,6 @@
 #region Using declarations
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -18,8 +19,9 @@ namespace NinjaTrader.NinjaScript.Strategies
     {
         private const string BarsHeader = "timestamp_utc_ns,instrument,open,high,low,close,volume,state";
         private const int EventSchemaVersion = 2;
+        private const int ControlSchemaVersion = 3;
         private const string EventsHeader = "schema_version,recorder_run_id,file_part,record_seq,event_id,timestamp_utc_ns,receive_time_utc_ns,instrument,event_type,price,volume,state";
-        private const string ControlHeader = "schema_version,recorder_run_id,control_seq,receive_time_utc_ns,instrument,control_type,status,connection_name,details";
+        private const string ControlHeader = "schema_version,recorder_run_id,control_seq,receive_time_utc_ns,instrument,control_type,status,connection_name,provider,feed_family,details";
         private const string DepthHeader = "timestamp_utc_ns,instrument,side,operation,position,price,volume,state";
 
         private readonly object sync = new object();
@@ -35,6 +37,8 @@ namespace NinjaTrader.NinjaScript.Strategies
         private int eventsPart;
         private int depthPart;
         private long eventsRecordSequence;
+        private long eventRowsWritten;
+        private long eventRowsInPart;
         private long controlSequence;
         private long barsRowsSinceFlush;
         private long eventsRowsSinceFlush;
@@ -44,6 +48,12 @@ namespace NinjaTrader.NinjaScript.Strategies
         private long depthEventsDropped;
         private bool depthQuotaBlocked;
         private DateTime depthWriterOpenedUtc = DateTime.MinValue;
+        private long writerErrorCount;
+        private bool controlWriterFaulted;
+        private bool runStopWritten;
+
+        [NinjaScriptProperty]
+        public string MarketDataConnectionName { get; set; }
 
         [NinjaScriptProperty]
         public bool RecordMarketDepth { get; set; }
@@ -96,17 +106,20 @@ namespace NinjaTrader.NinjaScript.Strategies
                 MaxDepthDirectoryMB = 16384;
                 MaxTotalDepthDirectoryMB = 120000;
                 FlushEveryRows = 5000;
+                MarketDataConnectionName = "";
             }
             else if (State == State.DataLoaded)
             {
                 OpenFiles();
-                RecordControl("RUN_START", "STARTED", CurrentConnectionName(), "");
+                NinjaTrader.Cbi.Connection feed = ResolveDataFeedConnection();
+                RecordControl("RUN_START", "STARTED", ConnectionName(feed),
+                    ProviderName(feed), FeedFamily(feed), RunStartDetails(feed));
                 RecordCurrentConnections();
             }
             else if (State == State.Transition || State == State.Realtime)
             {
-                RecordControl("STATE_CHANGE", State.ToString().ToUpperInvariant(),
-                    CurrentConnectionName(), "");
+                RecordControlForConfiguredFeed("STATE_CHANGE",
+                    State.ToString().ToUpperInvariant(), "");
             }
             else if (State == State.Terminated)
             {
@@ -158,13 +171,15 @@ namespace NinjaTrader.NinjaScript.Strategies
                         EventSchemaVersion, runId, eventsPart, recordSequence, eventId,
                         UnixNanos(e.Time), UnixNanos(DateTime.UtcNow), Instrument.FullName,
                         type, e.Price, (long)e.Volume, State));
+                    eventRowsWritten++;
+                    eventRowsInPart++;
                     eventsRowsSinceFlush++;
                     FlushAndRotateIfNeeded(ref eventsWriter, ref eventsRowsSinceFlush,
                         ref eventsPart, "events", EventsHeader);
                 }
                 catch (Exception ex)
                 {
-                    WriteControlUnsafe("WRITER_ERROR", "ERROR", CurrentConnectionName(),
+                    WriteControlForConfiguredFeedUnsafe("WRITER_ERROR", "ERROR",
                         "events: " + ex.Message);
                     Print("CodexResearchDataRecorder EVENT_WRITER_ERROR " + ex.Message);
                     try { if (eventsWriter != null) eventsWriter.Close(); } catch { }
@@ -178,14 +193,15 @@ namespace NinjaTrader.NinjaScript.Strategies
         {
             if (connectionStatusUpdate == null || connectionStatusUpdate.Connection == null)
                 return;
-            string name = connectionStatusUpdate.Connection.Options.Name;
+            string name = ConnectionName(connectionStatusUpdate.Connection);
+            string provider = ProviderName(connectionStatusUpdate.Connection);
             string details = string.Format(CultureInfo.InvariantCulture,
                 "order_status={0};price_status={1};error={2};native_error={3}",
                 connectionStatusUpdate.Status, connectionStatusUpdate.PriceStatus,
                 connectionStatusUpdate.Error, connectionStatusUpdate.NativeError);
             RecordControl("CONNECTION",
                 connectionStatusUpdate.PriceStatus.ToString().ToUpperInvariant(),
-                name, details);
+                name, provider, FeedFamily(connectionStatusUpdate.Connection), details);
         }
 
         protected override void OnMarketDepth(MarketDepthEventArgs e)
@@ -282,6 +298,8 @@ namespace NinjaTrader.NinjaScript.Strategies
                 return;
             }
             writer = NewWriter(kind, part, header);
+            if (kind == "events")
+                eventRowsInPart = 0;
             Print(string.Format(CultureInfo.InvariantCulture,
                 "CodexResearchDataRecorder ROTATE instrument={0} kind={1} part={2} reason={3}",
                 Instrument.FullName, kind, part, depthTimeDue ? "duration" : "size"));
@@ -338,22 +356,25 @@ namespace NinjaTrader.NinjaScript.Strategies
         {
             lock (sync)
             {
-                bool clean = true;
-                foreach (StreamWriter writer in new [] { barsWriter, eventsWriter, depthWriter })
-                {
-                    try
-                    {
-                        if (writer != null) { writer.Flush(); writer.Close(); }
-                    }
-                    catch (Exception ex)
-                    {
-                        clean = false;
-                        WriteControlUnsafe("WRITER_ERROR", "ERROR", CurrentConnectionName(),
-                            "close: " + ex.Message);
-                    }
-                }
-                WriteControlUnsafe("RUN_STOP", clean ? "CLEAN" : "ERROR",
-                    CurrentConnectionName(), "");
+                if (runStopWritten)
+                    return;
+
+                bool clean = writerErrorCount == 0 && !controlWriterFaulted;
+                clean = CloseDataWriter(ref barsWriter, "bars") && clean;
+                clean = CloseDataWriter(ref eventsWriter, "events") && clean;
+                clean = CloseDataWriter(ref depthWriter, "depth") && clean;
+                clean = RemoveEmptyTrailingEventPart() && clean;
+                if (RecordMarketDepth && (depthEventsDropped > 0 || depthQuotaBlocked))
+                    clean = false;
+
+                string details = string.Format(CultureInfo.InvariantCulture,
+                    "final_record_seq={0};event_rows={1};final_event_part={2};record_event_stream={3};depth_events_dropped={4};writer_error_count={5}",
+                    eventsRecordSequence, eventRowsWritten, eventsPart,
+                    RecordEventStream.ToString().ToLowerInvariant(), depthEventsDropped,
+                    writerErrorCount);
+                WriteControlForConfiguredFeedUnsafe("RUN_STOP",
+                    clean ? "CLEAN" : "ERROR", details);
+                runStopWritten = true;
                 try
                 {
                     if (controlWriter != null)
@@ -363,6 +384,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                     }
                 }
                 catch { }
+                controlWriter = null;
                 if (depthEventsDropped > 0)
                     Print(string.Format(CultureInfo.InvariantCulture,
                         "CodexResearchDataRecorder DEPTH_DROPPED_TOTAL instrument={0} dropped={1}",
@@ -370,67 +392,198 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
         }
 
-        private void RecordControl(string controlType, string status,
-                                   string connectionName, string details)
+        private bool CloseDataWriter(ref StreamWriter writer, string kind)
         {
-            lock (sync)
+            if (writer == null)
+                return true;
+            try
             {
-                WriteControlUnsafe(controlType, status, connectionName, details);
+                writer.Flush();
+                writer.Close();
+                writer = null;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                writer = null;
+                WriteControlForConfiguredFeedUnsafe("WRITER_ERROR", "ERROR",
+                    "close_" + kind + ": " + ex.Message);
+                return false;
             }
         }
 
+        private bool RemoveEmptyTrailingEventPart()
+        {
+            if (!RecordEventStream || eventsPart <= 0 || eventRowsInPart != 0)
+                return true;
+            try
+            {
+                string path = WriterPath("events", eventsPart);
+                if (File.Exists(path) && new FileInfo(path).Length <= EventsHeader.Length + 4)
+                {
+                    File.Delete(path);
+                    eventsPart--;
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                WriteControlForConfiguredFeedUnsafe("WRITER_ERROR", "ERROR",
+                    "remove_empty_event_part: " + ex.Message);
+                return false;
+            }
+        }
+
+        private void RecordControl(string controlType, string status,
+                                   string connectionName, string provider,
+                                   string feedFamily, string details)
+        {
+            lock (sync)
+            {
+                WriteControlUnsafe(controlType, status, connectionName, provider,
+                    feedFamily, details);
+            }
+        }
+
+        private void RecordControlForConfiguredFeed(string controlType,
+                                                     string status, string details)
+        {
+            lock (sync)
+            {
+                WriteControlForConfiguredFeedUnsafe(controlType, status, details);
+            }
+        }
+
+        private void WriteControlForConfiguredFeedUnsafe(string controlType,
+                                                          string status,
+                                                          string details)
+        {
+            NinjaTrader.Cbi.Connection feed = ResolveDataFeedConnection();
+            WriteControlUnsafe(controlType, status, ConnectionName(feed),
+                ProviderName(feed), FeedFamily(feed), details);
+        }
+
         private void WriteControlUnsafe(string controlType, string status,
-                                        string connectionName, string details)
+                                        string connectionName, string provider,
+                                        string feedFamily, string details)
         {
             if (controlWriter == null || string.IsNullOrEmpty(runId))
                 return;
+            if (controlType == "WRITER_ERROR")
+                writerErrorCount++;
             try
             {
                 long sequence = ++controlSequence;
                 controlWriter.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                    "{0},{1},{2},{3},{4},{5},{6},{7},{8}", EventSchemaVersion,
+                    "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10}", ControlSchemaVersion,
                     Csv(runId), sequence, UnixNanos(DateTime.UtcNow),
                     Csv(Instrument.FullName), Csv(controlType), Csv(status),
-                    Csv(connectionName), Csv(details)));
+                    Csv(connectionName), Csv(provider), Csv(feedFamily), Csv(details)));
                 controlWriter.Flush();
             }
             catch (Exception ex)
             {
+                controlWriterFaulted = true;
                 Print("CodexResearchDataRecorder CONTROL_WRITER_ERROR " + ex.Message);
             }
         }
 
-        private string CurrentConnectionName()
+        private NinjaTrader.Cbi.Connection ResolveDataFeedConnection()
         {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(MarketDataConnectionName))
+                    return null;
+                lock (NinjaTrader.Cbi.Connection.Connections)
+                {
+                    foreach (NinjaTrader.Cbi.Connection connection in
+                             NinjaTrader.Cbi.Connection.Connections)
+                    {
+                        if (connection != null && connection.Options != null &&
+                            string.Equals(connection.Options.Name,
+                                MarketDataConnectionName.Trim(),
+                                StringComparison.Ordinal))
+                            return connection;
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private string ConnectionName(NinjaTrader.Cbi.Connection connection)
+        {
+            if (connection != null && connection.Options != null &&
+                !string.IsNullOrWhiteSpace(connection.Options.Name))
+                return connection.Options.Name;
+            return string.IsNullOrWhiteSpace(MarketDataConnectionName)
+                ? "UNDECLARED" : MarketDataConnectionName.Trim();
+        }
+
+        private static string ProviderName(NinjaTrader.Cbi.Connection connection)
+        {
+            try
+            {
+                if (connection != null && connection.Options != null)
+                    return connection.Options.Provider.ToString();
+            }
+            catch { }
+            return "UNRESOLVED";
+        }
+
+        private static string FeedFamily(NinjaTrader.Cbi.Connection connection)
+        {
+            return ProviderName(connection);
+        }
+
+        private string RunStartDetails(NinjaTrader.Cbi.Connection feed)
+        {
+            string accountName = Account == null ? "NONE" : Account.Name;
+            string accountConnection = "NONE";
             try
             {
                 if (Account != null && Account.Connection != null &&
                     Account.Connection.Options != null)
-                    return Account.Connection.Options.Name;
+                    accountConnection = Account.Connection.Options.Name;
             }
             catch { }
-            return "UNKNOWN";
+            string priceStatus = feed == null ? "UNRESOLVED" : feed.PriceStatus.ToString();
+            return string.Format(CultureInfo.InvariantCulture,
+                "account={0};account_connection={1};price_status={2}",
+                accountName, accountConnection, priceStatus);
         }
 
         private void RecordCurrentConnections()
         {
             try
             {
+                List<NinjaTrader.Cbi.Connection> snapshot =
+                    new List<NinjaTrader.Cbi.Connection>();
                 lock (NinjaTrader.Cbi.Connection.Connections)
                 {
                     foreach (NinjaTrader.Cbi.Connection connection in
                              NinjaTrader.Cbi.Connection.Connections)
-                    {
-                        RecordControl("CONNECTION",
-                            connection.PriceStatus.ToString().ToUpperInvariant(),
-                            connection.Options.Name, "startup_snapshot");
-                    }
+                        snapshot.Add(connection);
+                }
+                foreach (NinjaTrader.Cbi.Connection connection in snapshot)
+                {
+                    RecordControl("CONNECTION",
+                        connection.PriceStatus.ToString().ToUpperInvariant(),
+                        ConnectionName(connection), ProviderName(connection),
+                        FeedFamily(connection), "startup_snapshot");
                 }
             }
             catch (Exception ex)
             {
-                RecordControl("CONNECTION_SNAPSHOT", "ERROR", "UNKNOWN", ex.Message);
+                RecordControl("CONNECTION_SNAPSHOT", "ERROR", "UNRESOLVED",
+                    "UNRESOLVED", "UNRESOLVED", ex.Message);
             }
+        }
+
+        private string WriterPath(string kind, int part)
+        {
+            string suffix = part == 0 ? "" : "_p" + part.ToString("D4", CultureInfo.InvariantCulture);
+            return Path.Combine(outputDirectory, runId + "_" + kind + suffix + ".csv");
         }
 
         private static string Csv(string value)
